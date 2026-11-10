@@ -126,7 +126,13 @@
         <input id="speed" type="range" min="0.5" max="1.5" step="0.05" value="1">
       </div>
       <div class="full row" style="gap:18px">
-        <label class="chk"><input type="checkbox" id="showFr" checked> Afficher la traduction française</label>
+        <label class="chk">Traduction
+          <select id="trans" style="width:auto;padding:6px 10px">
+            <option value="fr">Français (Hamidullah)</option>
+            <option value="en">English (Saheeh International)</option>
+            <option value="none">Aucune</option>
+          </select>
+        </label>
         <label class="chk"><input type="checkbox" id="bismOn"> Basmala au début de chaque boucle</label>
       </div>
     </div>
@@ -210,7 +216,7 @@
   // ---------- Éléments ----------
   const $ = id => document.getElementById(id);
   const el = { surah:$("surah"), from:$("from"), to:$("to"), reciter:$("reciter"), loops:$("loops"),
-    each:$("each"), gap:$("gap"), speed:$("speed"), speedVal:$("speedVal"), showFr:$("showFr"),
+    each:$("each"), gap:$("gap"), speed:$("speed"), speedVal:$("speedVal"), trans:$("trans"),
     bismOn:$("bismOn"), play:$("play"), stop:$("stop"), prev:$("prev"), next:$("next"),
     cur:$("cur"), loopCount:$("loopCount"), msg:$("msg"), verses:$("verses"), audio:$("audio") };
 
@@ -220,10 +226,10 @@
 
   // ---------- Mémorisation ----------
   const KEY = "quran-repeat-settings-v1";
-  const FIELDS = ["surah","from","to","reciter","loops","each","gap","speed"];
+  const FIELDS = ["surah","from","to","reciter","loops","each","gap","speed","trans"];
   function save(){
     const s = {}; FIELDS.forEach(f => s[f] = el[f].value);
-    s.showFr = el.showFr.checked; s.bismOn = el.bismOn.checked;
+    s.bismOn = el.bismOn.checked;
     try { localStorage.setItem(KEY, JSON.stringify(s)); } catch(e){}
   }
   function load(){
@@ -231,28 +237,51 @@
       const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (!s) return;
       FIELDS.forEach(f => { if (s[f] != null) el[f].value = s[f]; });
       if (!el.reciter.value) el.reciter.value = "matroud";
-      el.showFr.checked = s.showFr !== false; el.bismOn.checked = !!s.bismOn;
+      if (!s.trans && s.showFr === false) el.trans.value = "none";
+      if (!el.trans.value) el.trans.value = "fr";
+      el.bismOn.checked = !!s.bismOn;
     } catch(e){}
   }
 
   // ---------- Texte des versets ----------
   const cache = {};
+  const transOf = a => el.trans.value === "none" ? "" : (a[el.trans.value] || "");
+  // Texte : internet d'abord (et on en garde une copie), sinon la copie gardée dans l'application
+  const TEXT_CACHE = "quran-text-v1";
+  const textUrls = n => [
+    `https://api.alquran.cloud/v1/surah/${n}/editions/quran-uthmani,fr.hamidullah,en.sahih`,
+    `https://api.alquran.cloud/v1/surah/${n}/editions/quran-uthmani,fr.hamidullah`,
+    `https://api.quran.com/api/v4/quran/verses/uthmani?chapter_number=${n}`
+  ];
+  async function fetchKeep(u){
+    const hasCache = "caches" in window && window.isSecureContext;
+    try {
+      const r = await fetch(u);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (hasCache) try { await (await caches.open(TEXT_CACHE)).put(u, r.clone()); } catch(e){}
+      return r;
+    } catch(e){
+      if (hasCache){ const c = await (await caches.open(TEXT_CACHE)).match(u); if (c) return c; }
+      throw e;
+    }
+  }
   async function fetchSurah(n){
     if (cache[n]) return cache[n];
     let ayahs;
     try {
-      const r = await fetch(`https://api.alquran.cloud/v1/surah/${n}/editions/quran-uthmani,fr.hamidullah`);
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      const [ar, fr] = (await r.json()).data;
+      // Arabe + français + anglais en une seule fois (les deux traductions restent disponibles hors ligne)
+      let r;
+      try { r = await fetchKeep(textUrls(n)[0]); } catch(e){ r = await fetchKeep(textUrls(n)[1]); }
+      const [ar, fr, en] = (await r.json()).data;
+      const tr = (ed, i) => ed && ed.ayahs[i] ? ed.ayahs[i].text : "";
       ayahs = ar.ayahs.map((a,i) => {
         let t = a.text;
         if (n !== 1 && i === 0 && t.startsWith(BASMALA)) t = t.slice(BASMALA.length).trim();
-        return { n: a.numberInSurah, ar: t, fr: fr.ayahs[i] ? fr.ayahs[i].text : "" };
+        return { n: a.numberInSurah, ar: t, fr: tr(fr,i), en: tr(en,i) };
       });
     } catch(e){
       // Source de secours (texte arabe seul)
-      const r = await fetch(`https://api.quran.com/api/v4/quran/verses/uthmani?chapter_number=${n}`);
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      const r = await fetchKeep(textUrls(n)[2]);
       const j = await r.json();
       ayahs = j.verses.map(v => ({ n: +v.verse_key.split(":")[1], ar: v.text_uthmani, fr: "" }));
     }
@@ -286,7 +315,7 @@
       let html = showBism ? `<div class="bism">${BASMALA}</div>` : "";
       for (const x of ayahs.slice(a-1, b)){
         html += `<div class="ayah" data-n="${x.n}"><div class="t">${x.ar}<span class="n">${x.n}</span></div>` +
-                (el.showFr.checked && x.fr ? `<div class="fr">${x.n}. ${x.fr}</div>` : "") + `</div>`;
+                (transOf(x) ? `<div class="fr"${el.trans.value === "en" ? ' lang="en"' : ""}>${x.n}. ${transOf(x)}</div>` : "") + `</div>`;
       }
       if (!textOk) html = `<div class="hint" style="margin-bottom:8px">${OFFLINE_HINT}</div>` + html;
       el.verses.innerHTML = html;
@@ -339,7 +368,10 @@
     if (el.bismOn.checked && n !== 1 && n !== 9) items.push({ s:1, v:1, global:1 });
     for (let v = a; v <= b; v++) items.push({ s:n, v, global: START[n-1] + v - 1 });
     try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch(e){}
-    try { await fetchSurah(n); } catch(e){}   // garde aussi le texte
+    // Garde aussi le texte de la sourate dans l'application
+    let textSaved = false;
+    try { await fetchKeep(textUrls(n)[0]); textSaved = true; } catch(e){}
+    if (!textSaved) try { await fetchKeep(textUrls(n)[2]); textSaved = true; } catch(e){}
     const c = await caches.open(AUDIO_CACHE);
     $("dlTrack").hidden = false;
     let fails = 0;
@@ -351,7 +383,9 @@
     $("dlTrack").hidden = true; downloading = false;
     el.offInfo.textContent = fails
       ? `${fails} verset(s) n’ont pas pu être téléchargés. Vérifie ta connexion ou essaie un autre récitateur.`
-      : "Téléchargement terminé : cette plage fonctionne maintenant sans internet.";
+      : !textSaved ? "Audio téléchargé, mais le texte n’a pas pu être enregistré. Réessaie avec internet."
+      : "Téléchargement terminé : cette plage (son et texte) fonctionne maintenant sans internet.";
+    if (textSaved && !st.ayahs.some(a => a.ar)){ delete cache[n]; render(); }
     updateOffline();
   }
 
@@ -397,7 +431,7 @@
     else {
       const a = st.ayahs[item.n - 1] || {};
       el.fAr.innerHTML = (a.ar || "") + `<span class="n">${item.n}</span>`;
-      el.fFr.textContent = el.showFr.checked ? (a.fr || "") : "";
+      el.fFr.textContent = transOf(a);
       el.fRef.textContent = item.label;
     }
     el.bar.style.width = "0%";
@@ -532,8 +566,12 @@
     el.offInfo.textContent = "Téléchargements supprimés."; updateOffline();
   };
   [el.loops, el.each, el.gap, el.bismOn].forEach(x => x.onchange = save);
-  el.showFr.onchange = () => { save(); render(); };
+  el.trans.onchange = () => { save(); render(); };
   el.speed.oninput = () => { el.speedVal.textContent = (+el.speed.value).toFixed(2) + "×"; audio.playbackRate = +el.speed.value; save(); };
+
+  window.addEventListener("online", () => {
+    if (!st.ayahs.some(a => a.ar)){ delete cache[+el.surah.value]; render(); }
+  });
 
   // ---------- Démarrage ----------
   load();
