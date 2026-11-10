@@ -437,8 +437,86 @@
     el.bar.style.width = "0%";
   }
   audio.addEventListener("timeupdate", () => {
+    if (st.cont){ onContTime(); return; }
     if (audio.duration) el.bar.style.width = (100 * audio.currentTime / audio.duration) + "%";
   });
+
+  // ---------- Mode continu ----------
+  // Toute la boucle (versets + répétitions + pause) est assemblée en UN SEUL son qui tourne en boucle.
+  // Le navigateur n'a jamais besoin de lancer un nouveau fichier, donc la lecture continue écran éteint.
+  let contCache = { key:null, data:null };
+  async function getBytes(item){
+    const list = audioSources(el.reciter.value, item);
+    if (OFFLINE_OK) for (const u of list){
+      try {
+        const r = await (await caches.open(AUDIO_CACHE)).match(u);
+        if (r && r.type !== "opaque") return await r.arrayBuffer();
+      } catch(e){}
+    }
+    for (const u of list){
+      try { const r = await fetch(u, { mode:"cors" }); if (r.ok) return await r.arrayBuffer(); } catch(e){}
+    }
+    return null;
+  }
+  async function buildContinuous(queue){
+    const gap = +el.gap.value;
+    const key = JSON.stringify([el.reciter.value, gap, queue.map(q => q.global)]);
+    if (contCache.key === key) return contCache.data;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+    let ctx; try { ctx = new AC({ sampleRate: 22050 }); } catch(e){ ctx = new AC(); }
+    const rate = ctx.sampleRate, pcm = {};
+    try {
+      for (const q of queue){
+        const k = q.s + ":" + q.v; if (pcm[k]) continue;
+        const buf = await getBytes(q); if (!buf) return null;
+        const d = await ctx.decodeAudioData(buf);
+        const out = new Float32Array(d.length);
+        for (let c = 0; c < d.numberOfChannels; c++){
+          const ch = d.getChannelData(c);
+          for (let i = 0; i < d.length; i++) out[i] += ch[i] / d.numberOfChannels;
+        }
+        pcm[k] = out;
+      }
+    } catch(e){ return null; }
+    finally { try { ctx.close(); } catch(e){} }
+    let total = gap * rate; for (const q of queue) total += pcm[q.s + ":" + q.v].length;
+    if (total / rate > 3600) return null;   // plus d'une heure par boucle : trop lourd
+    const wav = new DataView(new ArrayBuffer(44 + total * 2));
+    const w = (o, t) => [...t].forEach((c,i) => wav.setUint8(o+i, c.charCodeAt(0)));
+    w(0,"RIFF"); wav.setUint32(4, 36 + total*2, true); w(8,"WAVE"); w(12,"fmt ");
+    wav.setUint32(16,16,true); wav.setUint16(20,1,true); wav.setUint16(22,1,true);
+    wav.setUint32(24,rate,true); wav.setUint32(28,rate*2,true); wav.setUint16(32,2,true); wav.setUint16(34,16,true);
+    w(36,"data"); wav.setUint32(40, total*2, true);
+    const segs = []; let pos = 0;
+    for (const q of queue){
+      const a = pcm[q.s + ":" + q.v];
+      for (let i = 0; i < a.length; i++){
+        const x = Math.max(-1, Math.min(1, a[i]));
+        wav.setInt16(44 + (pos + i) * 2, x < 0 ? x * 32768 : x * 32767, true);
+      }
+      segs.push({ start: pos / rate, end: (pos + a.length) / rate });
+      pos += a.length;
+    }
+    if (contCache.data) URL.revokeObjectURL(contCache.data.url);
+    const data = { url: URL.createObjectURL(new Blob([wav], { type:"audio/wav" })), segs, total: total / rate };
+    contCache = { key, data };
+    return data;
+  }
+  function onContTime(){
+    const t = audio.currentTime, c = st.cont;
+    if (t + 0.5 < st.lastT){   // retour au début : nouvelle boucle
+      const max = +el.loops.value;
+      if (max && st.loop >= max){ stop(); el.msg.textContent = `Terminé : ${max} répétitions effectuées.`; return; }
+      st.loop++;
+      el.loopCount.textContent = st.loop + (max ? ` / ${max}` : "");
+    }
+    st.lastT = t;
+    let i = c.segs.findIndex(g => t < g.end);
+    if (i < 0){ if (el.gap.value !== "0") el.cur.textContent = "Pause…"; el.bar.style.width = "100%"; return; }
+    if (i !== st.idx){ st.idx = i; const it = st.queue[i]; el.cur.textContent = it.label; highlight(); updateMediaSession(it); }
+    const g = c.segs[i];
+    el.bar.style.width = (100 * Math.max(0, t - g.start) / (g.end - g.start)) + "%";
+  }
 
   async function playCurrent(keepSrc){
     clearTimeout(st.timer);
@@ -457,7 +535,7 @@
     el.cur.textContent = item.label;
     el.loopCount.textContent = st.loop + (+el.loops.value ? ` / ${el.loops.value}` : "");
     highlight(); updateMediaSession(item);
-    audio.play().then(() => { el.msg.textContent = ""; }).catch(err => {
+    audio.play().then(() => { el.msg.textContent = st.note || ""; }).catch(err => {
       if (err && err.name === "NotAllowedError") el.msg.textContent = "Appuie sur ▶ pour autoriser la lecture.";
     });
     preloadNext();
@@ -499,50 +577,96 @@
   // Si le système met la lecture en pause (écran éteint, appel…), le bouton l'indique
   audio.addEventListener("pause", () => { if (st.playing && !audio.ended) el.play.textContent = "▶ Reprendre"; });
   audio.addEventListener("play", () => { if (st.playing) el.play.textContent = "⏸ Pause"; });
+  // Son quasi inaudible qui tourne en continu en mode verset par verset :
+  // il garde l'application « en lecture » pendant les passages d'un verset à l'autre.
+  const keep = new Audio(); keep.loop = true;
+  function hum(){
+    const rate = 8000, n = rate * 10, b = new DataView(new ArrayBuffer(44 + n * 2));
+    const w = (o, t) => [...t].forEach((c,i) => b.setUint8(o+i, c.charCodeAt(0)));
+    w(0,"RIFF"); b.setUint32(4,36+n*2,true); w(8,"WAVE"); w(12,"fmt ");
+    b.setUint32(16,16,true); b.setUint16(20,1,true); b.setUint16(22,1,true);
+    b.setUint32(24,rate,true); b.setUint32(28,rate*2,true); b.setUint16(32,2,true); b.setUint16(34,16,true);
+    w(36,"data"); b.setUint32(40,n*2,true);
+    for (let i = 0; i < n; i++) b.setInt16(44 + i*2, (i & 1) ? 1 : -1, true);
+    return URL.createObjectURL(new Blob([b], {type:"audio/wav"}));
+  }
+  const keepOn = () => { if (!keep.src) keep.src = hum(); keep.play().catch(() => {}); };
+  const keepOff = () => keep.pause();
+  function setPaused(p){
+    if (p){ audio.pause(); keepOff(); el.play.textContent = "▶ Reprendre"; }
+    else { audio.play().catch(() => {}); if (!st.cont) keepOn(); el.play.textContent = "⏸ Pause"; }
+  }
+  audio.addEventListener("playing", () => { st.retries = 0; });
+
   audio.addEventListener("ended", () => {
-    if (!st.playing) return;
+    if (!st.playing || st.cont || st.idx < 0) return;
     if (st.inGap){ st.inGap = false; playCurrent(); return; }
     advance();
   });
   audio.addEventListener("error", () => {
-    if (!st.playing) return;
+    if (!st.playing || st.cont || st.idx < 0) return;
     if (st.inGap){ st.inGap = false; playCurrent(); return; }
     const item = st.queue[st.idx]; if (!item) return;
     if (st.srcIdx + 1 < audioSources(el.reciter.value, item).length){ st.srcIdx++; playCurrent(true); }
     else if (!navigator.onLine){ el.msg.textContent = "Pas d’internet et ce verset n’est pas téléchargé. Utilise « Télécharger la plage » quand tu es connectée."; stop(); }
+    else if ((st.retries = (st.retries || 0) + 1) <= 3){ st.srcIdx = 0; st.timer = setTimeout(() => playCurrent(true), 3000); }
     else { el.msg.textContent = "Audio inaccessible. Si tu es dans l’aperçu de Claude, télécharge le fichier et ouvre-le dans ton navigateur. Sinon, vérifie ta connexion ou essaie un autre récitateur."; stop(); }
   });
 
-  function start(){
-    st.queue = buildQueue(); st.idx = 0; st.loop = 1; st.playing = true;
-    el.play.textContent = "⏸ Pause";
-    playCurrent();
+  async function start(){
+    st.queue = buildQueue(); st.idx = -1; st.loop = 1; st.playing = true; st.cont = null; st.lastT = 0; st.note = "";
+    el.play.textContent = "⏸ Pause"; el.msg.textContent = "";
+    // Débloque le son tout de suite (pendant que l'utilisateur vient de toucher le bouton)
+    audio.loop = false; audio.src = silence(1); audio.play().catch(() => {});
+    el.cur.textContent = "Préparation…";
+    const tok = ++st.token;
+    const data = await buildContinuous(st.queue);
+    if (tok !== st.token || !st.playing) return;
+    el.loopCount.textContent = 1 + (+el.loops.value ? ` / ${el.loops.value}` : "");
+    if (data){
+      st.cont = data;
+      audio.loop = true; audio.src = data.url; audio.playbackRate = +el.speed.value;
+      audio.play().catch(err => { if (err && err.name === "NotAllowedError") el.msg.textContent = "Appuie sur ▶ pour autoriser la lecture."; });
+    } else {
+      // Repli : un fichier par verset (peut s'arrêter écran éteint)
+      st.note = "Mode verset par verset (le site de ce récitateur bloque le mode continu). Si la lecture s’arrête écran éteint, essaie un autre récitateur.";
+      el.msg.textContent = st.note;
+      st.idx = 0; keepOn(); playCurrent();
+    }
   }
   function stop(){
-    st.playing = false; st.inGap = false; clearTimeout(st.timer); audio.pause();
+    st.token++; st.cont = null; audio.loop = false;
+    st.playing = false; st.inGap = false; clearTimeout(st.timer); audio.pause(); keepOff();
     el.play.textContent = "▶ Lancer la répétition"; el.cur.textContent = "—";
     highlight();
   }
   function togglePlay(){
     if (!st.playing){ start(); return; }
-    if (audio.paused){ audio.play(); el.play.textContent = "⏸ Pause"; }
-    else { audio.pause(); el.play.textContent = "▶ Reprendre"; }
+    setPaused(!audio.paused);
+  }
+  function seekSeg(i){
+    st.lastT = st.cont.segs[i].start; audio.currentTime = st.cont.segs[i].start + 0.01;
+    if (audio.paused) audio.play().catch(() => {});
   }
   function jumpTo(v){
-    if (!st.playing){ st.queue = buildQueue(); st.loop = 1; st.playing = true; el.play.textContent = "⏸ Pause"; }
-    const i = st.queue.findIndex(x => x.n === v); if (i >= 0){ st.idx = i; playCurrent(); }
+    if (!st.playing){ start(); return; }
+    const i = st.queue.findIndex(x => x.n === v); if (i < 0) return;
+    if (st.cont){ seekSeg(i); return; }
+    st.idx = i; playCurrent();
   }
   function step(d){
     if (!st.playing) return;
-    st.idx = Math.max(0, Math.min(st.queue.length - 1, st.idx + d)); playCurrent();
+    const i = Math.max(0, Math.min(st.queue.length - 1, st.idx + d));
+    if (st.cont){ seekSeg(i); return; }
+    st.idx = i; playCurrent();
   }
 
   function updateMediaSession(item){
     if (!("mediaSession" in navigator)) return;
     try {
       navigator.mediaSession.metadata = new MediaMetadata({ title: item.label, artist: el.reciter.selectedOptions[0].text, album: "Répétition coranique" });
-      navigator.mediaSession.setActionHandler("play", () => { audio.play(); el.play.textContent = "⏸ Pause"; });
-      navigator.mediaSession.setActionHandler("pause", () => { audio.pause(); el.play.textContent = "▶ Reprendre"; });
+      navigator.mediaSession.setActionHandler("play", () => setPaused(false));
+      navigator.mediaSession.setActionHandler("pause", () => setPaused(true));
       navigator.mediaSession.setActionHandler("previoustrack", () => step(-1));
       navigator.mediaSession.setActionHandler("nexttrack", () => step(1));
     } catch(e){}
