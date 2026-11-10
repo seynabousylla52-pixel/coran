@@ -11,9 +11,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Amiri&family=Scheherazade+New&family=Noto+Naskh+Arabic&family=Lateef&family=Reem+Kufi&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
+    --ar-font:"Amiri Quran"; --ar-size:28px; --tr-size:14px;
     --bg:#f6f3ec; --card:#fffdf8; --ink:#1d2a27; --muted:#6b7a75;
     --accent:#0f3d34; --accent2:#1f6b5a; --gold:#b8892e; --line:#e6dfd0;
     --hl:#fff4d6;
@@ -47,18 +48,18 @@
   .ayah{padding:14px 12px;border-bottom:1px solid var(--line);border-radius:10px;transition:background .25s;cursor:pointer}
   .ayah:last-child{border-bottom:0}
   .ayah.on{background:var(--hl);box-shadow:inset 3px 0 0 var(--gold)}
-  .ayah .t{font-family:"Amiri Quran",serif;font-size:28px;line-height:2.1;direction:rtl;text-align:right}
+  .ayah .t{font-family:var(--ar-font),"Amiri Quran",serif;font-size:var(--ar-size);line-height:2.1;direction:rtl;text-align:right}
   .ayah .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border:1.5px solid var(--gold);border-radius:50%;font-size:13px;font-family:Inter,sans-serif;color:var(--gold);margin-inline:6px;vertical-align:middle}
-  .ayah .fr{font-size:14px;color:var(--muted);line-height:1.55;margin-top:4px}
-  .bism{font-family:"Amiri Quran",serif;font-size:26px;text-align:center;direction:rtl;padding:6px 0 10px;color:var(--accent)}
+  .ayah .fr{font-size:var(--tr-size);color:var(--muted);line-height:1.55;margin-top:4px}
+  .bism{font-family:var(--ar-font),"Amiri Quran",serif;font-size:calc(var(--ar-size) - 2px);text-align:center;direction:rtl;padding:6px 0 10px;color:var(--accent)}
   .hint{font-size:12px;color:var(--muted)}
   input[type=range]{width:100%}
   .focus{position:sticky;top:58px;z-index:4;border-color:var(--gold);box-shadow:0 6px 18px rgba(0,0,0,.18)}
   .focus[hidden]{display:none}
   .fref{font-size:12px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:.05em}
-  .far{font-family:"Amiri Quran",serif;font-size:32px;line-height:2.1;direction:rtl;text-align:right;max-height:38vh;overflow:auto}
+  .far{font-family:var(--ar-font),"Amiri Quran",serif;font-size:calc(var(--ar-size) + 4px);line-height:2.1;direction:rtl;text-align:right;max-height:38vh;overflow:auto}
   .far .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border:1.5px solid var(--gold);border-radius:50%;font-size:13px;font-family:Inter,sans-serif;color:var(--gold);margin-inline:6px;vertical-align:middle}
-  .ffr{font-size:14px;color:var(--muted);line-height:1.5}
+  .ffr{font-size:var(--tr-size);color:var(--muted);line-height:1.5}
   .track{height:4px;background:var(--line);border-radius:4px;margin-top:10px;overflow:hidden}
   .bar{height:100%;width:0;background:var(--gold);transition:width .25s linear}
 </style>
@@ -124,6 +125,25 @@
       <div>
         <label for="speed">Vitesse : <span id="speedVal">1.00×</span></label>
         <input id="speed" type="range" min="0.5" max="1.5" step="0.05" value="1">
+      </div>
+      <div>
+        <label for="font">Police arabe</label>
+        <select id="font">
+          <option value="Amiri Quran">Amiri Quran</option>
+          <option value="Amiri">Amiri</option>
+          <option value="Scheherazade New">Scheherazade</option>
+          <option value="Noto Naskh Arabic">Noto Naskh</option>
+          <option value="Lateef">Lateef</option>
+          <option value="Reem Kufi">Reem Kufi (koufi)</option>
+        </select>
+      </div>
+      <div>
+        <label for="arSize">Taille arabe : <span id="arSizeVal">28</span></label>
+        <input id="arSize" type="range" min="18" max="60" step="1" value="28">
+      </div>
+      <div>
+        <label for="trSize">Taille traduction : <span id="trSizeVal">14</span></label>
+        <input id="trSize" type="range" min="11" max="26" step="1" value="14">
       </div>
       <div class="full row" style="gap:18px">
         <label class="chk">Traduction
@@ -216,7 +236,7 @@
   // ---------- Éléments ----------
   const $ = id => document.getElementById(id);
   const el = { surah:$("surah"), from:$("from"), to:$("to"), reciter:$("reciter"), loops:$("loops"),
-    each:$("each"), gap:$("gap"), speed:$("speed"), speedVal:$("speedVal"), trans:$("trans"),
+    each:$("each"), gap:$("gap"), speed:$("speed"), speedVal:$("speedVal"), trans:$("trans"), font:$("font"), arSize:$("arSize"), trSize:$("trSize"),
     bismOn:$("bismOn"), play:$("play"), stop:$("stop"), prev:$("prev"), next:$("next"),
     cur:$("cur"), loopCount:$("loopCount"), msg:$("msg"), verses:$("verses"), audio:$("audio") };
 
@@ -226,7 +246,7 @@
 
   // ---------- Mémorisation ----------
   const KEY = "quran-repeat-settings-v1";
-  const FIELDS = ["surah","from","to","reciter","loops","each","gap","speed","trans"];
+  const FIELDS = ["surah","from","to","reciter","loops","each","gap","speed","trans","font","arSize","trSize"];
   function save(){
     const s = {}; FIELDS.forEach(f => s[f] = el[f].value);
     s.bismOn = el.bismOn.checked;
@@ -700,8 +720,22 @@
     if (!st.ayahs.some(a => a.ar)){ delete cache[+el.surah.value]; render(); }
   });
 
+  // Police et tailles d'affichage
+  function applyLook(){
+    const r = document.documentElement.style;
+    r.setProperty("--ar-font", `"${el.font.value || "Amiri Quran"}"`);
+    r.setProperty("--ar-size", el.arSize.value + "px");
+    r.setProperty("--tr-size", el.trSize.value + "px");
+    $("arSizeVal").textContent = el.arSize.value;
+    $("trSizeVal").textContent = el.trSize.value;
+  }
+  el.font.onchange = () => { applyLook(); save(); };
+  el.arSize.oninput = el.trSize.oninput = () => { applyLook(); save(); };
+
   // ---------- Démarrage ----------
   load();
+  if (!el.font.value) el.font.value = "Amiri Quran";
+  applyLook();
   el.speedVal.textContent = (+el.speed.value).toFixed(2) + "×";
   render();
 })();

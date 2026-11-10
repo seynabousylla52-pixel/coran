@@ -1,6 +1,6 @@
 // Service worker : garde l'application, le texte et les récitations téléchargées
 // dans le stockage interne de l'application (pas dans les fichiers du téléphone).
-const SHELL = "quran-shell-v6";
+const SHELL = "quran-shell-v7";
 const TEXT = "quran-text-v1";
 const AUDIO = "quran-audio-v1";
 const SHELL_FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
