@@ -496,6 +496,9 @@
     return silCache[sec] = URL.createObjectURL(new Blob([b], {type:"audio/wav"}));
   }
 
+  // Si le système met la lecture en pause (écran éteint, appel…), le bouton l'indique
+  audio.addEventListener("pause", () => { if (st.playing && !audio.ended) el.play.textContent = "▶ Reprendre"; });
+  audio.addEventListener("play", () => { if (st.playing) el.play.textContent = "⏸ Pause"; });
   audio.addEventListener("ended", () => {
     if (!st.playing) return;
     if (st.inGap){ st.inGap = false; playCurrent(); return; }
